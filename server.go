@@ -63,7 +63,7 @@ func (room *ChatRoom) Tell(memo *Memo, empty *Nothing) error {
 	defer room.mutex.Unlock()
 	_, ok := room.users[memo.Target]
 	if ok {
-		fmt.Println(memo.Sender, "tells", memo.Target, "'",memo.Message,"'")
+		//fmt.Println(memo.Sender, "tells", memo.Target, "'",memo.Message,"'")
 		room.users[memo.Target] = append(room.users[memo.Target], memo.Sender+" tells you "+memo.Message)
 	} else {
 		//fmt.Println(memo.Sender, "tells", memo.Target, "'",memo.Message,"' but they didn't get the message")
