@@ -11,7 +11,6 @@ func main() {
 	if len(os.Args) != 2 {
 		log.Fatalf("Usage: %s <serveraddress>", os.Args[0])
 	}
-
 	address := os.Args[1]
 	if strings.HasPrefix(address, ":") {
 		address = "localhost" + address
@@ -23,10 +22,11 @@ func main() {
 	}
 
 	var reply int
-	if err = client.Call("ChatRoom.Say", arg, &reply); err != nil {
-		log.Fatalf("Error calling ChatRoom.Say: %v", err)
+	arg := 5
+	if err = client.Call("Counter.Increment", arg, &reply); err != nil {
+		log.Fatalf("Error calling Counter.Increment: %v", err)
 	}
-	log.Printf("Say returned %d", reply)
+	log.Printf("Increment returned %d", reply)
 
 	reply = -1
 	if err = client.Call("Counter.Get", struct{}{}, &reply); err != nil {
