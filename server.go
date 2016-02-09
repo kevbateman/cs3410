@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 type Nothing struct{}
@@ -15,6 +16,7 @@ type Nothing struct{}
 type ChatRoom struct {
 	users map[string][]string
 	shutdown chan bool
+	mutex sync.Mutex
 }
 type Memo struct {
 	Sender, Target, Message string
@@ -24,6 +26,8 @@ type Record struct {
 }
 
 func (room *ChatRoom) Register(user *string, empty *Nothing) error {
+	room.mutex.Lock()
+	defer room.mutex.Unlock()
 	fmt.Println(*user, "joined the room")
 	room.users[*user] = make([]string,0)
 	for k, _ := range room.users {
@@ -33,6 +37,8 @@ func (room *ChatRoom) Register(user *string, empty *Nothing) error {
 }
 
 func (room *ChatRoom) List(empty *Nothing, online *[]string) error {
+	room.mutex.Lock()
+	defer room.mutex.Unlock()
 	//fmt.Println("listing online users")
 	for k, _ := range room.users {
 		*online = append(*online, "\n    ",k)
@@ -42,6 +48,8 @@ func (room *ChatRoom) List(empty *Nothing, online *[]string) error {
 }
 
 func (room *ChatRoom) CheckMessages(user *string, messages *[]string) error {
+	room.mutex.Lock()
+	defer room.mutex.Unlock()
 	//fmt.Println("checking", *user, "messages")
 	for _, message := range room.users[*user] {
 		*messages = append(*messages, message)
@@ -51,6 +59,8 @@ func (room *ChatRoom) CheckMessages(user *string, messages *[]string) error {
 }
 
 func (room *ChatRoom) Tell(memo *Memo, empty *Nothing) error {
+	room.mutex.Lock()
+	defer room.mutex.Unlock()
 	_, ok := room.users[memo.Target]
 	if ok {
 		fmt.Println(memo.Sender, "tells", memo.Target, "'",memo.Message,"'")
@@ -63,6 +73,8 @@ func (room *ChatRoom) Tell(memo *Memo, empty *Nothing) error {
 }
 
 func (room *ChatRoom) Say(record *Record, empty *Nothing) error {
+	room.mutex.Lock()
+	defer room.mutex.Unlock()
 	//fmt.Println(record.Sender, "says", record.Message)
 	for k, _ := range room.users {
 		room.users[k] = append(room.users[k], record.Sender+" says "+record.Message)
@@ -71,6 +83,8 @@ func (room *ChatRoom) Say(record *Record, empty *Nothing) error {
 }
 
 func (room *ChatRoom) Logout(user *string, empty *Nothing) error {
+	room.mutex.Lock()
+	defer room.mutex.Unlock()
 	//fmt.Println(*user, "logged out")
 	delete(room.users, *user)
 	for k, _ := range room.users {
@@ -80,6 +94,8 @@ func (room *ChatRoom) Logout(user *string, empty *Nothing) error {
 }
 
 func (room *ChatRoom) Shutdown(empty1 *Nothing, empty2 *Nothing) error {
+	room.mutex.Lock()
+	defer room.mutex.Unlock()
 	//fmt.Println("Shutting down server")
 	room.shutdown <- true
 	return nil
@@ -91,7 +107,7 @@ func main() {
 	flag.Parse()
 	fmt.Printf("The port is %s\n", port)
 
-	room := &ChatRoom{make(map[string][]string), make(chan bool)}
+	room := &ChatRoom{users:make(map[string][]string)}
 
 	go func () {
 		_,ok := <- room.shutdown
