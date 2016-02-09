@@ -23,14 +23,10 @@ func main() {
 	}
 
 	var reply int
-	if err = client.Call("ChatRoom.Say", arg, &reply); err != nil {
+	var client_user string
+	client_user = "kevin"
+	if err = client.Call("ChatRoom.Register", &client_user, &reply); err != nil {
 		log.Fatalf("Error calling ChatRoom.Say: %v", err)
 	}
-	log.Printf("Say returned %d", reply)
-
-	reply = -1
-	if err = client.Call("Counter.Get", struct{}{}, &reply); err != nil {
-		log.Fatalf("Error calling Counter.Get: %v", err)
-	}
-	log.Printf("Get returned %d", reply)
+	log.Printf("Register returned %d", reply)
 }
