@@ -7,23 +7,25 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"os"
 )
 
 type Nothing struct{}
 
 type ChatRoom struct {
 	users map[string][]string
+	shutdown chan bool
 }
-
 type Memo struct {
-	sender, target, message string
+	Sender, Target, Message string
 }
 type Record struct {
-	sender, message string
+	Sender, Message string
 }
 
 func (room *ChatRoom) Register(user *string, empty *Nothing) error {
-	log.Printf(*user, "joined the room")
+	fmt.Println(*user, "joined the room")
+	room.users[*user] = make([]string,0)
 	for k, _ := range room.users {
 		room.users[k] = append(room.users[k], *user + " has joined the room")
 	}
@@ -31,46 +33,55 @@ func (room *ChatRoom) Register(user *string, empty *Nothing) error {
 }
 
 func (room *ChatRoom) List(empty *Nothing, online *[]string) error {
-	log.Printf("listing online users")
+	//fmt.Println("listing online users")
 	for k, _ := range room.users {
-		*online = append(*online, k)
+		*online = append(*online, "\n    ",k)
 	}
+	*online = append(*online,"\n")
 	return nil
 }
 
 func (room *ChatRoom) CheckMessages(user *string, messages *[]string) error {
-	log.Printf("checking", user, "messages")
+	//fmt.Println("checking", *user, "messages")
 	for _, message := range room.users[*user] {
 		*messages = append(*messages, message)
 	}
+	room.users[*user] = room.users[*user][:0]
 	return nil
 }
 
 func (room *ChatRoom) Tell(memo *Memo, empty *Nothing) error {
-	log.Printf(memo.sender, "tells", memo.target, memo.message)
-	_, ok := room.users[memo.target]
+	_, ok := room.users[memo.Target]
 	if ok {
-		room.users[memo.target] = append(room.users[memo.target], memo.sender+" tells you "+memo.message)
+		fmt.Println(memo.Sender, "tells", memo.Target, "'",memo.Message,"'")
+		room.users[memo.Target] = append(room.users[memo.Target], memo.Sender+" tells you "+memo.Message)
 	} else {
-		room.users[memo.sender] = append(room.users[memo.sender],memo.target+" did not get your message '"+memo.message+ "'")
+		//fmt.Println(memo.Sender, "tells", memo.Target, "'",memo.Message,"' but they didn't get the message")
+		room.users[memo.Sender] = append(room.users[memo.Sender],memo.Target+" did not get your message '"+memo.Message+ "'")
 	}
 	return nil
 }
 
 func (room *ChatRoom) Say(record *Record, empty *Nothing) error {
-	log.Printf(record.sender, "says", record.message)
+	//fmt.Println(record.Sender, "says", record.Message)
 	for k, _ := range room.users {
-		room.users[k] = append(room.users[k], record.sender+" says "+record.message)
+		room.users[k] = append(room.users[k], record.Sender+" says "+record.Message)
 	}
 	return nil
 }
 
 func (room *ChatRoom) Logout(user *string, empty *Nothing) error {
-	log.Printf(*user, "logged out")
+	//fmt.Println(*user, "logged out")
 	delete(room.users, *user)
 	for k, _ := range room.users {
 		room.users[k] = append(room.users[k], *user+" has logged out")
 	}
+	return nil
+}
+
+func (room *ChatRoom) Shutdown(empty1 *Nothing, empty2 *Nothing) error {
+	//fmt.Println("Shutting down server")
+	room.shutdown <- true
 	return nil
 }
 
@@ -80,7 +91,15 @@ func main() {
 	flag.Parse()
 	fmt.Printf("The port is %s\n", port)
 
-	room := new(ChatRoom)
+	room := &ChatRoom{make(map[string][]string), make(chan bool)}
+
+	go func () {
+		_,ok := <- room.shutdown
+		if ok {
+			os.Exit(0)
+		}
+	}()
+
 	rpc.Register(room)
 	rpc.HandleHTTP()
 
