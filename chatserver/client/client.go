@@ -102,7 +102,7 @@ func main() {
 			fmt.Println("  tell <user> <message>:\n    Sends specific <user> a <message>.")
 			fmt.Println("  say <message>:\n    Sends a <message> to everyone in the room.")
 			fmt.Println("  list:\n    Lists all users currently in the room.")
-			fmt.Println("  help:\n    Displays all of the commands to use.\n")
+			fmt.Println("  help:\n    Displays all of the commands to use.")
 		default:
 			fmt.Println("Unrecognized Command", scanner.Text())
 		}
