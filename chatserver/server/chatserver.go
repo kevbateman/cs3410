@@ -14,9 +14,9 @@ import (
 type Nothing struct{}
 
 type ChatRoom struct {
-	users map[string][]string
+	users    map[string][]string
 	shutdown chan bool
-	mutex sync.Mutex
+	mutex    sync.Mutex
 }
 type Memo struct {
 	Sender, Target, Message string
@@ -29,9 +29,9 @@ func (room *ChatRoom) Register(user *string, empty *Nothing) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 	fmt.Println(*user, "joined the room")
-	room.users[*user] = make([]string,0)
+	room.users[*user] = make([]string, 0)
 	for k, _ := range room.users {
-		room.users[k] = append(room.users[k], *user + " has joined the room")
+		room.users[k] = append(room.users[k], *user+" has joined the room")
 	}
 	return nil
 }
@@ -41,9 +41,9 @@ func (room *ChatRoom) List(empty *Nothing, online *[]string) error {
 	defer room.mutex.Unlock()
 	//fmt.Println("listing online users")
 	for k, _ := range room.users {
-		*online = append(*online, "\n    ",k)
+		*online = append(*online, "\n    ", k)
 	}
-	*online = append(*online,"\n")
+	*online = append(*online, "\n")
 	return nil
 }
 
@@ -67,7 +67,7 @@ func (room *ChatRoom) Tell(memo *Memo, empty *Nothing) error {
 		room.users[memo.Target] = append(room.users[memo.Target], memo.Sender+" tells you "+memo.Message)
 	} else {
 		//fmt.Println(memo.Sender, "tells", memo.Target, "'",memo.Message,"' but they didn't get the message")
-		room.users[memo.Sender] = append(room.users[memo.Sender],memo.Target+" did not get your message '"+memo.Message+ "'")
+		room.users[memo.Sender] = append(room.users[memo.Sender], memo.Target+" did not get your message '"+memo.Message+"'")
 	}
 	return nil
 }
@@ -107,10 +107,10 @@ func main() {
 	flag.Parse()
 	fmt.Printf("The port is %s\n", port)
 
-	room := &ChatRoom{users:make(map[string][]string)}
+	room := &ChatRoom{users: make(map[string][]string)}
 
-	go func () {
-		_,ok := <- room.shutdown
+	go func() {
+		_, ok := <-room.shutdown
 		if ok {
 			os.Exit(0)
 		}
