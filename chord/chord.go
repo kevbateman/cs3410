@@ -15,6 +15,9 @@ import (
 	"sync"
 )
 
+// Nothing is nothing
+type Nothing struct{}
+
 // Key is a string that is just used for distinction between other string types
 type Key string
 
@@ -91,57 +94,58 @@ func getLocalAddress() string {
 	return localaddress
 } /*END OF RUSS HELP CODE*/
 
-// Create initializes ring
-func (elt *Node) Create(empty1 *struct{}, empty2 *struct{}) error {
-	elt.mutex.Lock()
-	defer elt.mutex.Unlock()
+// Ping is used to ping between server and node
+func (elt *Node) Ping(empty1 *struct{}, empty2 *struct{}) error {
+	fmt.Println("PING!")
+	return nil
+}
+
+// Create function that initializes the ring
+func Create(address string, empty *struct{}) error {
 	var port string
 	flag.StringVar(&port, "port", "3410", "port to listen on")
 	flag.Parse()
 	fmt.Printf("The port is %s\n", port)
 
-	rpc.Register(elt)
-	rpc.HandleHTTP()
-	l, e := net.Listen("tcp", ":"+port)
-	if e != nil {
-		log.Fatal("listen error:", e)
-	}
-	go http.Serve(l, nil)
+	var node Node
+	node.Key = "key"
+	node.Value = "value"
+	node.Address = "address"
+	node.Predecessor = "predecessor"
+	node.Successors = make([]string, 0)
+	fmt.Println(node)
+	go func() {
+		rpc.Register(&node)
+		rpc.HandleHTTP()
+		log.Fatal(http.ListenAndServe(":"+port, nil))
+	}()
 	return nil
 }
 
-// Ping is used to ping between server and node
-func (elt *Node) Ping(empty1 *struct{}, empty2 *struct{}) error {
-	elt.mutex.Lock()
-	defer elt.mutex.Unlock()
-	log.Print("Ping!")
-	return nil
-}
+// // Register is required method of rpc
+// func (elt *Node) Register(address *string, client *rpc.Client) error {
+// 	client, err := rpc.DialHTTP("tcp", address)
+// 	if err != nil {
+// 		log.Fatalf("Error connecting to server at %s: %v", address, err)
+// 	}
+// 	if err = client.Call("Node.Ping", &struct{}{}, &struct{}{}); err != nil {
+// 		log.Fatalf("Error calling node.CheckMessages: %v", err)
+// 	}
+// 	return nil
+// }
 
-// Register is required method of rpc
-func (elt *Node) Register(address string, client *rpc.Client) error {
-	elt.mutex.Lock()
-	defer elt.mutex.Unlock()
-	client, err := rpc.DialHTTP("tcp", address)
-	if err != nil {
-		log.Fatalf("Error connecting to server at %s: %v", address, err)
-	}
-	if err = client.Call("Node.Ping", &struct{}{}, &struct{}{}); err != nil {
-		log.Fatalf("Error calling node.CheckMessages: %v", err)
-	}
-	return nil
-}
 func main() {
 	if len(os.Args) != 1 {
 		log.Fatalf("Usage: %s <serveraddress>", os.Args[0])
 	}
 	var (
-		client  rpc.Client
+		client  *rpc.Client
 		err     error
 		active  bool
 		address string
 	)
 	active = false
+	address = getLocalAddress()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Enter command:")
@@ -177,8 +181,11 @@ func main() {
 				log.Fatalf("Cannot set port; a ring has already been created or joined. ")
 			}
 		case "create":
-			if err = client.Call("Node.Create", &struct{}{}, &struct{}{}); err != nil {
-				log.Fatalf("Error calling Node.Create: %v", err)
+			Create(address, &struct{}{})
+			//var err error
+			client, err = rpc.DialHTTP("tcp", address)
+			if err != nil {
+				log.Fatalf("Error connecting to server at %s: %v", address, err)
 			}
 			active = true
 		case "ping":
