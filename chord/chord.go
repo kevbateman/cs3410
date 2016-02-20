@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"crypto/sha1"
-	"flag"
 	"fmt"
 	"log"
 	"math/big"
@@ -26,11 +25,10 @@ type Value string
 
 // Node holds a key-value pair.
 type Node struct {
-	Key         Key
-	Value       Value
 	Address     string
 	Predecessor string
 	Successors  []string
+	Bucket      map[Key]Value
 	mutex       sync.Mutex
 }
 
@@ -94,106 +92,230 @@ func getLocalAddress() string {
 	return localaddress
 } /*END OF RUSS HELP CODE*/
 
+// Dump lists the key/value pairs stored locally.
+func (elt *Node) Dump(empty1 *struct{}, info *Node) error {
+	info.Address = elt.Address
+	info.Predecessor = elt.Predecessor
+	info.Successors = elt.Successors
+	info.Bucket = elt.Bucket
+	return nil
+}
+
+// Delete has the peer remove the given key-value from the currently active ring.
+func (elt *Node) Delete(key *Key, empty *struct{}) error {
+	if _, ok := elt.Bucket[*key]; ok {
+		delete(elt.Bucket, *key)
+		// 	log.Printf("\tSUCCESS (Deletion): key '%s' and its value were removed from node", *key)
+		// } else {
+		// 	log.Printf("\tFAILED (Deletion attempt: key '%s' does not exist in node", *key)
+	}
+	return nil
+}
+
+// Put inserts the given key and value into the currently active ring.
+func (elt *Node) Put(pair *struct {
+	Key   Key
+	Value Value
+}, empty *struct{}) error {
+	elt.Bucket[pair.Key] = pair.Value
+	//log.Printf("\tSUCCESS: key:value [%s:%s] was added to node", pair.Key, pair.Value)
+	return nil
+}
+
+// Get finds the given key-value in the currently active ring.
+func (elt *Node) Get(key *Key, value *Value) error {
+	if val, ok := elt.Bucket[*key]; ok {
+		*value = val
+		// } else {
+		// 	log.Printf("\tFAILED: key '%s' does not exist in node", *key)
+	}
+	return nil
+}
+
 // Ping is used to ping between server and node
-func (elt *Node) Ping(empty1 *struct{}, empty2 *struct{}) error {
-	fmt.Println("PING!")
+func (elt *Node) Ping(port string, empty *struct{}) error {
+	_, err := rpc.DialHTTP("tcp", elt.Address+port)
+	if err != nil {
+		log.Printf("\tFailed to PING server at %s: %v", elt.Address+port, err)
+	} else {
+		log.Printf("\tSUCCESS: PING(%s) on port '%s'", elt.Address, port)
+	}
 	return nil
 }
-
-// Create function that initializes the ring
-func Create(address string, empty *struct{}) error {
-	var port string
-	flag.StringVar(&port, "port", "3410", "port to listen on")
-	flag.Parse()
-	fmt.Printf("The port is %s\n", port)
-
-	var node Node
-	node.Key = "key"
-	node.Value = "value"
-	node.Address = "address"
-	node.Predecessor = "predecessor"
-	node.Successors = make([]string, 0)
-	fmt.Println(node)
-	go func() {
-		rpc.Register(&node)
-		rpc.HandleHTTP()
-		log.Fatal(http.ListenAndServe(":"+port, nil))
-	}()
-	return nil
-}
-
-// // Register is required method of rpc
-// func (elt *Node) Register(address *string, client *rpc.Client) error {
-// 	client, err := rpc.DialHTTP("tcp", address)
-// 	if err != nil {
-// 		log.Fatalf("Error connecting to server at %s: %v", address, err)
-// 	}
-// 	if err = client.Call("Node.Ping", &struct{}{}, &struct{}{}); err != nil {
-// 		log.Fatalf("Error calling node.CheckMessages: %v", err)
-// 	}
-// 	return nil
-// }
 
 func main() {
+	fmt.Println()
 	if len(os.Args) != 1 {
-		log.Fatalf("Usage: %s <serveraddress>", os.Args[0])
+		log.Fatalf("\t'chord' takes no arguemnts")
 	}
+
 	var (
-		client  *rpc.Client
-		err     error
-		active  bool
-		address string
+		client *rpc.Client
+		err    error
 	)
-	active = false
-	address = getLocalAddress()
+
+	port := ":3410"
+	active := false
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Enter command:")
 	for scanner.Scan() {
 		commands := strings.Split(scanner.Text(), " ")
 		switch commands[0] {
-		case "quit":
-			if &client != nil {
-				if err = client.Call("server.Shutdown", &struct{}{}, &struct{}{}); err != nil {
-					log.Fatalf("Error calling server.Shutdown: %v", err)
-				}
-			}
-			os.Exit(0)
 		case "help":
-			fmt.Println("\nCOMMANDS:")
-			fmt.Println("    port <n>:\n\tset the port that this node should list on. Default is '3410'")
-			fmt.Println("    quit:\n\t quit and ends the program")
-			fmt.Println("    help:\n\t displays a list of recognized commands")
+			fmt.Println("\thelp:\n\t\tDisplays a list of recognized commands")
+			fmt.Println("\tquit:\n\t\tEnds the program")
+			fmt.Println("\tport <n>:\n\t\tSet listening port to <n>. Default is ':3410'")
+			fmt.Println("\tcreate:\n\t\tCreate a new ring on the current port")
+			fmt.Println("\tget <key>:\n\t\tGet the value from the current node corresponding to the given <key>")
+			fmt.Println("\tput <key> <value>:\n\t\tGet the value from the current node corresponding to the given key")
+		case "quit":
+			log.Printf("\tShutting down\n\n")
+			os.Exit(0)
 		case "port":
+			if active {
+				log.Printf("\tFAILED: Cannot change port; a ring has already been created or joined on this port")
+			} else if len(commands) == 2 {
+				port = commands[1]
+			}
+			log.Printf("\tPort is currently set to '%s'", port)
+		case "create":
 			if !active {
-				if len(commands) == 1 {
-					fmt.Println("defaulting address to 'localhost:3410'")
-					fmt.Println()
-					address = ":3410"
-				} else {
-					address = commands[1]
+				node := Node{
+					Address:     getLocalAddress(),
+					Predecessor: "",
+					Successors:  []string{getLocalAddress()},
+					Bucket:      make(map[Key]Value),
 				}
+				go func() {
+					rpc.Register(&node)
+					rpc.HandleHTTP()
+					log.Fatal(http.ListenAndServe(port, nil), "")
+				}()
+				log.Printf("\tNew ring created on port '%s'", port)
 
-				if strings.HasPrefix(address, ":") {
-					address = "localhost" + address
+				client, err = rpc.DialHTTP("tcp", "localhost"+port)
+				if err != nil {
+					log.Printf("\tError connecting to server at %s: %v", "localhost"+port, err)
+				} else {
+					log.Printf("\tSUCCESS: Connected node to server at '%s'", "localhost"+port)
+					active = true
 				}
 			} else {
-				log.Fatalf("Cannot set port; a ring has already been created or joined. ")
+				log.Printf("\tFAILED: A ring has already been created or joined on this port")
 			}
-		case "create":
-			Create(address, &struct{}{})
-			//var err error
-			client, err = rpc.DialHTTP("tcp", address)
-			if err != nil {
-				log.Fatalf("Error connecting to server at %s: %v", address, err)
-			}
-			active = true
 		case "ping":
-			if err = client.Call("Node.Ping", &struct{}{}, &struct{}{}); err != nil {
-				log.Fatalf("Error calling Node.Ping: %v", err)
+			if active {
+				if err = client.Call("Node.Ping", port, &struct{}{}); err != nil {
+					log.Printf("\tError calling Node.Ping: %v", err)
+				}
+			} else {
+				log.Printf("\tFAILED: There is no active node to PING on port '%s'", port)
+			}
+		case "get":
+			if active {
+				if len(commands) == 2 {
+					var value string
+					if err = client.Call("Node.Get", &commands[1], &value); err != nil {
+						log.Printf("\tError calling Node.Get: %v", err)
+					}
+					if len(value) > 0 {
+						log.Printf("\tSUCCESS: Retrieved value '%s'", value)
+					} else {
+						log.Printf("\tFAILED: Could not retrieve a value with key '%s'", commands[1])
+					}
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <key> parameter; use 'get <key>' command: ")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'get <key>' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active in order to 'get <key>' values")
+			}
+		case "put":
+			if active {
+				if len(commands) == 3 {
+					pair := struct {
+						Key   Key
+						Value Value
+					}{Key(commands[1]), Value(commands[2])}
+					if err = client.Call("Node.Put", &pair, &struct{}{}); err != nil {
+						log.Printf("\tError calling Node.Put: %v", err)
+					}
+				} else if len(commands) == 2 {
+					log.Printf("\tFAILED: Missing <value> parameter; use 'put <key> <value>' command: ")
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <key> and <value> parameters; use 'put <key> <value>' command")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'put <key> <value>' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active in order to 'put <key> <value>' pairs")
+			}
+		case "delete":
+			if active {
+				if len(commands) == 2 {
+					if err = client.Call("Node.Delete", &commands[1], &struct{}{}); err != nil {
+						log.Printf("\tError calling Node.Delete: %v", err)
+					}
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <key> parameter; use 'delete <key>' command: ")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'delete <key>' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active to 'delete <key>' values")
+			}
+		case "dump":
+			if active {
+				if len(commands) == 1 {
+					var values Node
+					if err = client.Call("Node.Dump", &struct{}{}, &values); err != nil {
+						log.Printf("\tError calling Node.Dump: %v", err)
+					}
+					log.Printf("\n\tAddress:\t%s\n\tPredecessor:\t%s\n\tSuccessors:\t%v\n\tBucket:\t\t%v",
+						values.Address, values.Predecessor, values.Successors, values.Bucket)
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'dump' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active to 'dump' values")
+			}
+		case "join":
+			if !active {
+				if len(commands) == 2 {
+
+					// node := Node{
+					// 	Address:     getLocalAddress(),
+					// 	Predecessor: "",
+					// 	Successors:  []string{getLocalAddress()},
+					// 	Bucket:      make(map[Key]Value),
+					// }
+					// go func() {
+					// 	rpc.Register(&node)
+					// 	rpc.HandleHTTP()
+					// 	log.Fatal(http.ListenAndServe(port, nil), "")
+					// }()
+					//log.Printf("\tNew ring created on port '%s'", port)
+
+					//client, err = rpc.DialHTTP("tcp", "localhost"+port)
+					client, err = rpc.DialHTTP("tcp", commands[1]+port)
+					if err != nil {
+						log.Printf("\tError connecting to server at %s: %v", "localhost"+port, err)
+					} else {
+						log.Printf("\tSUCCESS: Connected node to server at '%s'", "localhost"+port)
+						active = true
+					}
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <address> parameter; use 'join <address>' command: ")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'join <address>' command")
+				}
+			} else {
+				log.Printf("\tFAILED: A ring has already been join or created on this port")
 			}
 		default:
-			fmt.Println("Unrecognized Command", scanner.Text())
+			log.Printf("\tUnrecognized Command '%s'", scanner.Text())
 		}
 	}
 }

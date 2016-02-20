@@ -11,42 +11,51 @@ import (
 	"sync"
 )
 
+// Nothing is used for return types
 type Nothing struct{}
 
+// ChatRoom is the main room struct
 type ChatRoom struct {
 	users    map[string][]string
 	shutdown chan bool
 	mutex    sync.Mutex
 }
+
+// Memo is used to tell things
 type Memo struct {
 	Sender, Target, Message string
 }
+
+// Record is used to say things
 type Record struct {
 	Sender, Message string
 }
 
+// Register joins someone to the room
 func (room *ChatRoom) Register(user *string, empty *Nothing) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 	fmt.Println(*user, "joined the room")
 	room.users[*user] = make([]string, 0)
-	for k, _ := range room.users {
+	for k := range room.users {
 		room.users[k] = append(room.users[k], *user+" has joined the room")
 	}
 	return nil
 }
 
+// List everyone online
 func (room *ChatRoom) List(empty *Nothing, online *[]string) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 	//fmt.Println("listing online users")
-	for k, _ := range room.users {
+	for k := range room.users {
 		*online = append(*online, "\n    ", k)
 	}
 	*online = append(*online, "\n")
 	return nil
 }
 
+// CheckMessages updates clients screen
 func (room *ChatRoom) CheckMessages(user *string, messages *[]string) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
@@ -58,6 +67,7 @@ func (room *ChatRoom) CheckMessages(user *string, messages *[]string) error {
 	return nil
 }
 
+// Tell says something to someone
 func (room *ChatRoom) Tell(memo *Memo, empty *Nothing) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
@@ -72,27 +82,30 @@ func (room *ChatRoom) Tell(memo *Memo, empty *Nothing) error {
 	return nil
 }
 
+// Say says something to everyone
 func (room *ChatRoom) Say(record *Record, empty *Nothing) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 	//fmt.Println(record.Sender, "says", record.Message)
-	for k, _ := range room.users {
+	for k := range room.users {
 		room.users[k] = append(room.users[k], record.Sender+" says "+record.Message)
 	}
 	return nil
 }
 
+// Logout logs out
 func (room *ChatRoom) Logout(user *string, empty *Nothing) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
 	//fmt.Println(*user, "logged out")
 	delete(room.users, *user)
-	for k, _ := range room.users {
+	for k := range room.users {
 		room.users[k] = append(room.users[k], *user+" has logged out")
 	}
 	return nil
 }
 
+// Shutdown terminates server
 func (room *ChatRoom) Shutdown(empty1 *Nothing, empty2 *Nothing) error {
 	room.mutex.Lock()
 	defer room.mutex.Unlock()
