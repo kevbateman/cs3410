@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Nothing is nothing
@@ -133,12 +134,12 @@ func (elt *Node) Get(key *Key, value *Value) error {
 }
 
 // Ping is used to ping between server and node
-func (elt *Node) Ping(port string, empty *struct{}) error {
-	_, err := rpc.DialHTTP("tcp", elt.Address+port)
+func (elt *Node) Ping(address string, empty *struct{}) error {
+	_, err := rpc.DialHTTP("tcp", address)
 	if err != nil {
-		log.Printf("\tFailed to PING server at %s: %v", elt.Address+port, err)
+		log.Printf("\tFailed to PING(%s): %v", address, err)
 	} else {
-		log.Printf("\tSUCCESS: PING(%s) on port '%s'", elt.Address, port)
+		log.Printf("\tSUCCESS: PING(%s)", address)
 	}
 	return nil
 }
@@ -156,9 +157,18 @@ func main() {
 
 	port := ":3410"
 	active := false
+	address := getLocalAddress() + port
+	node := Node{
+		Address:     address,
+		Predecessor: "",
+		Successors:  []string{address},
+		Bucket:      make(map[Key]Value),
+	}
+	rpc.Register(&node)
+	rpc.HandleHTTP()
 
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("Enter command:")
+	fmt.Println("Default port is ':3410'\nEnter command:")
 	for scanner.Scan() {
 		commands := strings.Split(scanner.Text(), " ")
 		switch commands[0] {
@@ -177,28 +187,22 @@ func main() {
 				log.Printf("\tFAILED: Cannot change port; a ring has already been created or joined on this port")
 			} else if len(commands) == 2 {
 				port = commands[1]
+				address = getLocalAddress() + port
 			}
 			log.Printf("\tPort is currently set to '%s'", port)
 		case "create":
 			if !active {
-				node := Node{
-					Address:     getLocalAddress(),
-					Predecessor: "",
-					Successors:  []string{getLocalAddress()},
-					Bucket:      make(map[Key]Value),
-				}
 				go func() {
-					rpc.Register(&node)
-					rpc.HandleHTTP()
 					log.Fatal(http.ListenAndServe(port, nil), "")
 				}()
+				time.Sleep(time.Second)
 				log.Printf("\tNew ring created on port '%s'", port)
 
-				client, err = rpc.DialHTTP("tcp", "localhost"+port)
+				client, err = rpc.DialHTTP("tcp", address)
 				if err != nil {
-					log.Printf("\tError connecting to server at %s: %v", "localhost"+port, err)
+					log.Printf("\tError connecting to ring at %s: %v", address, err)
 				} else {
-					log.Printf("\tSUCCESS: Connected node to server at '%s'", "localhost"+port)
+					log.Printf("\tSUCCESS: Connected node to ring at '%s'", address)
 					active = true
 				}
 			} else {
@@ -206,11 +210,17 @@ func main() {
 			}
 		case "ping":
 			if active {
-				if err = client.Call("Node.Ping", port, &struct{}{}); err != nil {
-					log.Printf("\tError calling Node.Ping: %v", err)
+				if len(commands) == 2 {
+					if err = client.Call("Node.Ping", commands[1], &struct{}{}); err != nil {
+						log.Printf("\tError calling Node.Ping: %v", err)
+					}
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <port> parameter; use 'ping <port>' command: ")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'ping <port>' command")
 				}
 			} else {
-				log.Printf("\tFAILED: There is no active node to PING on port '%s'", port)
+				log.Printf("\tFAILED: Node must be active in order to 'ping <port>'")
 			}
 		case "get":
 			if active {
@@ -284,26 +294,17 @@ func main() {
 		case "join":
 			if !active {
 				if len(commands) == 2 {
+					go func() {
+						log.Fatal(http.ListenAndServe(port, nil), "")
+					}()
+					time.Sleep(time.Second)
+					log.Printf("\tNew node created on port '%s'", port)
 
-					// node := Node{
-					// 	Address:     getLocalAddress(),
-					// 	Predecessor: "",
-					// 	Successors:  []string{getLocalAddress()},
-					// 	Bucket:      make(map[Key]Value),
-					// }
-					// go func() {
-					// 	rpc.Register(&node)
-					// 	rpc.HandleHTTP()
-					// 	log.Fatal(http.ListenAndServe(port, nil), "")
-					// }()
-					//log.Printf("\tNew ring created on port '%s'", port)
-
-					//client, err = rpc.DialHTTP("tcp", "localhost"+port)
-					client, err = rpc.DialHTTP("tcp", commands[1]+port)
+					client, err = rpc.DialHTTP("tcp", address)
 					if err != nil {
-						log.Printf("\tError connecting to server at %s: %v", "localhost"+port, err)
+						log.Printf("\tError connecting to server at %s: %v", commands[1], err)
 					} else {
-						log.Printf("\tSUCCESS: Connected node to server at '%s'", "localhost"+port)
+						log.Printf("\tSUCCESS: Connected node to server at '%s'", commands[1])
 						active = true
 					}
 				} else if len(commands) == 1 {
