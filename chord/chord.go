@@ -24,7 +24,7 @@ type Key string
 // Value is a string that is just used for distinction between other string types
 type Value string
 
-// Node holds a key-value pair.
+// Node holds all node data
 type Node struct {
 	Address     string
 	Predecessor string
@@ -33,32 +33,16 @@ type Node struct {
 	mutex       sync.Mutex
 }
 
-func call(address string, method string, request interface{}, reply interface{}) error {
-	client, err := rpc.DialHTTP("tcp", address)
-	defer client.Close()
-	if err != nil {
-		log.Printf("\tError connecting to server at %s: %v", address, err)
-	}
-	client.Call("Node."+method, request, reply)
-	return err
+// KeyValue holds a key and a value
+type KeyValue struct {
+	Key   Key
+	Value Value
 }
 
-// Lookup iterates 32 times looking for a key
-func (elt *Node) Lookup(key string, host *string) error {
-	address := elt.Address
-	for i := 0; i < 32; i++ {
-		var successor string
-		call(address, "FindSuccessor", elt.Successors[0], &successor)
-		var keyExists bool
-		call(successor, "Exists", key, &keyExists)
-		if keyExists {
-			log.Printf("Found key '%s' at '%s'", key, successor)
-			*host = successor
-			return nil
-		}
-		address = successor
-	}
-	return nil
+// KeyFound holds a key and a value specifing if it has been found
+type KeyFound struct {
+	Address string
+	Found   bool
 }
 
 /*START OF RUSS HELP CODE*/
@@ -121,15 +105,63 @@ func getLocalAddress() string {
 	return localaddress
 } /*END OF RUSS HELP CODE*/
 
+func call(address string, method string, request interface{}, reply interface{}) error {
+	client, err := rpc.DialHTTP("tcp", address)
+	defer client.Close()
+	if err != nil {
+		client.Close()
+		log.Printf("\tError connecting to server at %s: %v", address, err)
+		return nil
+	}
+	return client.Call("Node."+method, request, reply)
+}
+
+func (elt *Node) find(key string) string {
+	keyfound := KeyFound{elt.Successors[0], false}
+	count := 32
+	for !keyfound.Found {
+		if count > 0 {
+			call(keyfound.Address, "FindSuccessor", hashString(key), &keyfound)
+			count--
+		} else {
+			return ""
+		}
+	}
+	return keyfound.Address
+}
+
+// CheckPredecssor checks if predecessor has failed
+func (elt *Node) checkPredecessor() error {
+	client, err := rpc.DialHTTP("tcp", elt.Predecessor)
+	defer client.Close()
+	if err != nil {
+		elt.Predecessor = ""
+	}
+	return nil
+}
+
+// FixFingers refreshes finger table enteries
+func (elt *Node) FixFingers(*struct{}, *struct{}) error {
+	return nil
+}
+
 // FindSuccessor asks Node elt to find the successor of address
-func (elt *Node) FindSuccessor(address string, successor *string) error {
-	if between(hashString(elt.Address),
-		hashString(address),
-		hashString(elt.Successors[0]),
-		true) {
-		*successor = elt.Successors[0]
+func (elt *Node) FindSuccessor(hash *big.Int, keyfound *KeyFound) error {
+	if between(hashString(elt.Address), hash, hashString(elt.Successors[0]), true) {
+		keyfound.Address = elt.Successors[0]
+		keyfound.Found = true
 	} else {
-		call(elt.Successors[0], "FindSuccessor", address, successor)
+		keyfound.Address = elt.Successors[0]
+	}
+	return nil
+}
+
+// Put inserts the given key and value into the currently active ring.
+func (elt *Node) Put(keyvalue *KeyValue, empty *struct{}) error {
+	if between(hashString(elt.Address), hashString(string(keyvalue.Key)), hashString(elt.Successors[0]), true) {
+		elt.Bucket[keyvalue.Key] = keyvalue.Value
+	} else {
+		call(elt.find(string(keyvalue.Key)), "Put", keyvalue, &struct{}{})
 	}
 	return nil
 }
@@ -141,24 +173,25 @@ func (elt *Node) Notify(address string, empty *struct{}) error {
 			hashString(address),
 			hashString(elt.Address),
 			false) {
-		log.Printf("\tSetting node '%s' predecessor to '%s'", elt.Address, address)
+		log.Printf("\tSetting predecessor to '%s'", address)
 		elt.Predecessor = address
 	}
 	return nil
 }
 
 // Stabilize is called every second
-func (elt *Node) Stabilize(empty1 *struct{}, empty2 *struct{}) error {
-	var x string
+func (elt *Node) stabilize() error {
+	x := ""
 	call(elt.Successors[0], "GetPredecessor", &struct{}{}, &x)
 	if between(hashString(elt.Address),
 		hashString(x),
 		hashString(elt.Successors[0]),
 		false) && x != "" {
-		log.Printf("\tSetting node.successor to '%s'", x)
+		log.Printf("\tSetting successor to '%s'", x)
 		elt.Successors[0] = x
 	}
 	call(elt.Successors[0], "Notify", elt.Address, &struct{}{})
+	//call(elt.Address, "CheckPredecssor", &struct{}{}, &struct{}{})
 	return nil
 }
 
@@ -169,12 +202,8 @@ func (elt *Node) GetPredecessor(empty1 *struct{}, predecessor *string) error {
 }
 
 // Join an existing ring
-func (elt *Node) Join(address string, empty *struct{}) error {
-	elt.Predecessor = ""
-	var successor string
-	call(address, "FindSuccessor", elt.Address, &successor)
-	log.Printf("\tSetting node.successor to '%s'", successor)
-	elt.Successors[0] = successor
+func (elt *Node) Join(address string, successor *string) error {
+	*successor = elt.find(address)
 	return nil
 }
 
@@ -189,48 +218,32 @@ func (elt *Node) Dump(empty1 *struct{}, info *Node) error {
 
 // Delete has the peer remove the given key-value from the currently active ring.
 func (elt *Node) Delete(key Key, empty *struct{}) error {
-	if _, ok := elt.Bucket[key]; ok {
+	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
 		delete(elt.Bucket, key)
 	} else {
-
+		call(elt.find(string(key)), "Delete", key, &struct{}{})
 	}
-	return nil
-}
-
-// Put inserts the given key and value into the currently active ring.
-func (elt *Node) Put(pair *struct {
-	Key   Key
-	Value Value
-}, empty *struct{}) error {
-	elt.Bucket[pair.Key] = pair.Value
-	var x string
-	call(elt.Address, "FindSuccessor", elt.Successors[0], &x)
-	//log.Printf("\tSUCCESS: key:value [%s:%s] was added to node", pair.Key, pair.Value)
 	return nil
 }
 
 // Get finds the given key-value in the currently active ring.
 func (elt *Node) Get(key Key, value *Value) error {
-	if val, ok := elt.Bucket[key]; ok {
-		*value = val
+	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
+		*value = elt.Bucket[key]
+	} else {
+		call(elt.find(string(key)), "Get", key, value)
 	}
 	return nil
 }
 
 // Ping is used to ping between server and node
-func (elt *Node) Ping(address string, empty *struct{}) error {
-	//log.Printf("\tPing address = %s", address)
+func (elt *Node) Ping(address string, pong *bool) error {
 	if address == "SUCCESS" {
-		log.Printf("\t '%s'", elt.Address)
-	} else {
-		err := call(address, "Ping", "SUCCESS", &struct{}{})
-		if err != nil {
-			log.Printf("\tFAILED: could not PING address '%s'", address)
-		} else {
-			log.Printf("\tSUCCESS: PINGED address '%s'", address)
-		}
+		log.Printf("\tSUCCESS: PINGED '%s'", elt.Address)
+		*pong = true
+		return nil
 	}
-	return nil
+	return call(address, "Ping", "SUCCESS", pong)
 }
 
 func printHelp() {
@@ -262,16 +275,25 @@ func main() {
 
 	port := ":3410"
 	active := false
-	address := getLocalAddress() + port
+	// address := getLocalAddress() + port
+
+	node := Node{
+		Address:     getLocalAddress() + port,
+		Predecessor: "",
+		Successors:  [3]string{getLocalAddress() + port},
+		Bucket:      make(map[Key]Value),
+	}
 
 	go func() {
 		for {
 			if active {
-				call(address, "Stabilize", &struct{}{}, &struct{}{})
+				node.stabilize()
+				node.checkPredecessor()
 			}
 			time.Sleep(time.Second)
 		}
 	}()
+
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Default port is ':3410'\nEnter command:")
 	for scanner.Scan() {
@@ -287,19 +309,13 @@ func main() {
 				log.Printf("\tFAILED: Cannot change port after creating or joining")
 			} else if len(commands) == 2 {
 				port = commands[1]
-				address = getLocalAddress() + port
+				node.Address = getLocalAddress() + port
 			}
 			log.Printf("\tPort is currently set to '%s'", port)
 		case "create":
 			if !active {
-				node := Node{
-					Address:     address,
-					Predecessor: "",
-					Successors:  [3]string{address},
-					Bucket:      make(map[Key]Value),
-				}
 				create(&node, port)
-				log.Printf("\tCreated ring at '%s'", address)
+				log.Printf("\tCreated ring at '%s'", node.Address)
 				active = true
 			} else {
 				log.Printf("\tFAILED: A ring has already been created or joined")
@@ -307,7 +323,13 @@ func main() {
 		case "ping":
 			if active {
 				if len(commands) == 2 {
-					call(address, "Ping", commands[1], &struct{}{})
+					pong := false
+					call(node.Address, "Ping", commands[1], &pong)
+					if pong {
+						log.Printf("\tSUCCESS: PINGED '%s'", commands[1])
+					} else {
+						log.Printf("\tFAILED: Could not PING '%s'", commands[1])
+					}
 				} else if len(commands) == 1 {
 					log.Printf("\tFAILED: Missing <address> parameter; use 'ping <address>' command: ")
 				} else {
@@ -320,7 +342,7 @@ func main() {
 			if active {
 				if len(commands) == 2 {
 					var value string
-					err := call(address, "Get", commands[1], &value)
+					err := call(node.Address, "Get", commands[1], &value)
 					if err == nil {
 						if len(value) > 0 {
 							log.Printf("\tSUCCESS: Retrieved value '%s'", value)
@@ -339,14 +361,13 @@ func main() {
 		case "put":
 			if active {
 				if len(commands) == 3 {
-					pair := struct {
-						Key   Key
-						Value Value
-					}{Key(commands[1]), Value(commands[2])}
-					err := call(address, "Put", &pair, &struct{}{})
+					keyvalue := KeyValue{Key(commands[1]), Value(commands[2])}
+
+					err := call(node.Address, "Put", &keyvalue, &struct{}{})
 					if err == nil {
-						log.Printf("\tSUCCESS: '%s':'%s' was inserted into node", pair.Key, pair.Value)
+						log.Printf("\tSUCCESS: '%s':'%s' was inserted into node", keyvalue.Key, keyvalue.Value)
 					}
+					//}
 				} else if len(commands) == 2 {
 					log.Printf("\tFAILED: Missing <value> parameter; use 'put <key> <value>' command: ")
 				} else if len(commands) == 1 {
@@ -360,7 +381,7 @@ func main() {
 		case "delete":
 			if active {
 				if len(commands) == 2 {
-					err := call(address, "Delete", commands[1], &struct{}{})
+					err := call(node.Address, "Delete", commands[1], &struct{}{})
 					if err == nil {
 						log.Printf("\tSUCCESS: '%s' value was removed from node", commands[1])
 					}
@@ -376,7 +397,7 @@ func main() {
 			if active {
 				if len(commands) == 1 {
 					var values Node
-					err := call(address, "Dump", &struct{}{}, &values)
+					err := call(node.Address, "Dump", &struct{}{}, &values)
 					if err == nil {
 						log.Printf("\n\tAddress:\t%s\n\tPredecessor:\t%s\n\tSuccessors:\t%v\n\tBucket:\t\t%v",
 							values.Address, values.Predecessor, values.Successors, values.Bucket)
@@ -390,20 +411,15 @@ func main() {
 		case "join":
 			if !active {
 				if len(commands) == 2 {
-					node := Node{
-						Address:     address,
-						Predecessor: "",
-						Successors:  [3]string{address},
-						Bucket:      make(map[Key]Value),
-					}
 					create(&node, port)
 					active = true
-					err := call(address, "Join", commands[1], &struct{}{})
+					var successor string
+					err := call(commands[1], "Join", node.Address, &successor)
 					if err == nil {
-						//log.Printf("\tSUCCESS: Set '%s' as successor", commands[1])
-						log.Printf("\tSUCCESS: Joined ring at '%s'", commands[1])
+						log.Printf("\tSetting successor to '%s'", successor)
+						node.Successors[0] = successor
 					} else {
-						log.Fatalf("\tFAILED: Could not join ring at '%s'", commands[1])
+						log.Fatalf("\tFAILED: Could not join ring at '%s'", successor)
 					}
 				} else if len(commands) == 1 {
 					log.Printf("\tFAILED: Missing <address> parameter; use 'join <address>' command: ")
@@ -417,7 +433,7 @@ func main() {
 			if active {
 				if len(commands) == 2 {
 					var value string
-					err := call(address, "Get", commands[1], &value)
+					err := call(node.Address, "Get", commands[1], &value)
 					if err == nil {
 						if len(value) > 0 {
 							log.Printf("\tSUCCESS: Retrieved value '%s'", value)
