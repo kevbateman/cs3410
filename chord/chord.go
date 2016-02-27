@@ -30,6 +30,8 @@ type Node struct {
 	Predecessor string
 	Successors  [3]string
 	Bucket      map[Key]Value
+	Fingers     [161]string
+	Next        int
 	mutex       sync.Mutex
 }
 
@@ -130,6 +132,20 @@ func (elt *Node) find(key string) string {
 	return keyfound.Address
 }
 
+func (elt *Node) findHash(key *big.Int) string {
+	keyfound := KeyFound{elt.Successors[0], false}
+	count := 32
+	for !keyfound.Found {
+		if count > 0 {
+			call(keyfound.Address, "FindSuccessor", key, &keyfound)
+			count--
+		} else {
+			return ""
+		}
+	}
+	return keyfound.Address
+}
+
 // CheckPredecssor checks if predecessor has failed
 func (elt *Node) checkPredecessor() error {
 	client, err := rpc.DialHTTP("tcp", elt.Predecessor)
@@ -141,7 +157,9 @@ func (elt *Node) checkPredecessor() error {
 }
 
 // FixFingers refreshes finger table enteries
-func (elt *Node) FixFingers(*struct{}, *struct{}) error {
+func (elt *Node) fixFingers() error {
+	elt.Next = (elt.Next + 1) % len(elt.Fingers)
+	elt.Fingers[elt.Next] = elt.findHash(elt.jump(elt.Next))
 	return nil
 }
 
@@ -275,20 +293,22 @@ func main() {
 
 	port := ":3410"
 	active := false
-	// address := getLocalAddress() + port
 
 	node := Node{
 		Address:     getLocalAddress() + port,
 		Predecessor: "",
 		Successors:  [3]string{getLocalAddress() + port},
 		Bucket:      make(map[Key]Value),
+		// Fingers:     [161]string,
+		Next: 0,
 	}
 
 	go func() {
 		for {
 			if active {
 				node.stabilize()
-				node.checkPredecessor()
+				//node.checkPredecessor()
+				node.fixFingers()
 			}
 			time.Sleep(time.Second)
 		}
