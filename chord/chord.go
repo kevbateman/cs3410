@@ -176,12 +176,12 @@ func (elt *Node) FindSuccessor(hash *big.Int, keyfound *KeyFound) error {
 
 // Put inserts the given key and value into the currently active ring.
 func (elt *Node) Put(keyvalue *KeyValue, empty *struct{}) error {
-	if between(hashString(elt.Address), hashString(string(keyvalue.Key)), hashString(elt.Successors[0]), true) {
-		elt.Bucket[keyvalue.Key] = keyvalue.Value
-	} else {
-		call(elt.find(string(keyvalue.Key)), "Put", keyvalue, &struct{}{})
-	}
+	elt.Bucket[keyvalue.Key] = keyvalue.Value
 	return nil
+}
+
+func (elt *Node) put(keyvalue *KeyValue) error {
+	return call(elt.find(string(keyvalue.Key)), "Put", keyvalue, &struct{}{})
 }
 
 // Notify tells the node at 'address' that it might be our predecessor
@@ -308,7 +308,7 @@ func main() {
 			if active {
 				node.stabilize()
 				//node.checkPredecessor()
-				node.fixFingers()
+				//node.fixFingers()
 			}
 			time.Sleep(time.Second)
 		}
@@ -383,7 +383,8 @@ func main() {
 				if len(commands) == 3 {
 					keyvalue := KeyValue{Key(commands[1]), Value(commands[2])}
 
-					err := call(node.Address, "Put", &keyvalue, &struct{}{})
+					err := node.put(&keyvalue)
+					//err := call(node.Address, "Put", &keyvalue, &struct{}{})
 					if err == nil {
 						log.Printf("\tSUCCESS: '%s':'%s' was inserted into node", keyvalue.Key, keyvalue.Value)
 					}
