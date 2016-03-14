@@ -234,25 +234,47 @@ func (elt *Node) Dump(empty1 *struct{}, info *Node) error {
 	return nil
 }
 
-// Delete has the peer remove the given key-value from the currently active ring.
+// Delete inserts the given key and value into the currently active ring.
 func (elt *Node) Delete(key Key, empty *struct{}) error {
-	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
-		delete(elt.Bucket, key)
-	} else {
-		call(elt.find(string(key)), "Delete", key, &struct{}{})
-	}
+	fmt.Printf("deleting from %s", elt.Address)
+	// REMEMBER TO FIX THIS; CHECK IF KEY EXISTS AND TELL USER AND ALSO MAKE GET
+	delete(elt.Bucket, key)
 	return nil
 }
 
-// Get finds the given key-value in the currently active ring.
-func (elt *Node) Get(key Key, value *Value) error {
-	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
-		*value = elt.Bucket[key]
-	} else {
-		call(elt.find(string(key)), "Get", key, value)
-	}
+func (elt *Node) delete(key Key) error {
+	return call(elt.find(string(key)), "Delete", key, &struct{}{})
+}
+
+// Get retrieves the a value stored at by a given key.
+func (elt *Node) Get(keyvalue *KeyValue, empty *struct{}) error {
+	keyvalue.Value = elt.Bucket[keyvalue.Key]
 	return nil
 }
+
+func (elt *Node) get(keyvalue *KeyValue) error {
+	return call(elt.find(string(keyvalue.Key)), "Get", keyvalue, &struct{}{})
+}
+
+// // Delete has the peer remove the given key-value from the currently active ring.
+// func (elt *Node) Delete(key Key, empty *struct{}) error {
+// 	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
+// 		delete(elt.Bucket, key)
+// 	} else {
+// 		call(elt.find(string(key)), "Delete", key, &struct{}{})
+// 	}
+// 	return nil
+// }
+
+// Get finds the given key-value in the currently active ring.
+// func (elt *Node) Get(key Key, value *Value) error {
+// 	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
+// 		*value = elt.Bucket[key]
+// 	} else {
+// 		call(elt.find(string(key)), "Get", key, value)
+// 	}
+// 	return nil
+// }
 
 // Ping is used to ping between server and node
 func (elt *Node) Ping(address string, pong *bool) error {
@@ -361,11 +383,12 @@ func main() {
 		case "get":
 			if active {
 				if len(commands) == 2 {
-					var value string
-					err := call(node.Address, "Get", commands[1], &value)
+					keyvalue := KeyValue{Key(commands[1]), Value("")}
+
+					err := node.get(&keyvalue)
 					if err == nil {
-						if len(value) > 0 {
-							log.Printf("\tSUCCESS: Retrieved value '%s'", value)
+						if len(keyvalue.Value) > 0 {
+							log.Printf("\tSUCCESS: Retrieved value '%s'", keyvalue.Value)
 						} else {
 							log.Printf("\tFAILED: Could not retrieve a value with key '%s'", commands[1])
 						}
@@ -402,7 +425,7 @@ func main() {
 		case "delete":
 			if active {
 				if len(commands) == 2 {
-					err := call(node.Address, "Delete", commands[1], &struct{}{})
+					err := node.delete(Key(commands[1]))
 					if err == nil {
 						log.Printf("\tSUCCESS: '%s' value was removed from node", commands[1])
 					}
