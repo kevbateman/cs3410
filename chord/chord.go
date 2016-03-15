@@ -174,16 +174,6 @@ func (elt *Node) FindSuccessor(hash *big.Int, keyfound *KeyFound) error {
 	return nil
 }
 
-// Put inserts the given key and value into the currently active ring.
-func (elt *Node) Put(keyvalue *KeyValue, empty *struct{}) error {
-	elt.Bucket[keyvalue.Key] = keyvalue.Value
-	return nil
-}
-
-func (elt *Node) put(keyvalue *KeyValue) error {
-	return call(elt.find(string(keyvalue.Key)), "Put", keyvalue, &struct{}{})
-}
-
 // Notify tells the node at 'address' that it might be our predecessor
 func (elt *Node) Notify(address string, empty *struct{}) error {
 	if elt.Predecessor == "" ||
@@ -234,26 +224,38 @@ func (elt *Node) Dump(empty1 *struct{}, info *Node) error {
 	return nil
 }
 
+func (elt *Node) handleData(command string, keyvalue *KeyValue) error {
+	if command == "Get" {
+		return call(elt.find(string(keyvalue.Key)), command, keyvalue.Key, &keyvalue.Value)
+	}
+	return call(elt.find(string(keyvalue.Key)), command, keyvalue, &struct{}{})
+}
+
+// Put inserts the given key and value into the currently active ring.
+func (elt *Node) Put(keyvalue *KeyValue, empty *struct{}) error {
+	elt.Bucket[keyvalue.Key] = keyvalue.Value
+	log.Printf("\t%s was added to this node", *keyvalue)
+	return nil
+}
+
+// Get retrieves the a value stored in the ring by a given key.
+func (elt *Node) Get(key Key, value *Value) error {
+	if val, ok := elt.Bucket[key]; ok {
+		*value = val
+		log.Printf("\t{%s %s} value was retrieved from this node", key, val)
+		return nil
+	}
+	return fmt.Errorf("\tKey '%s' does not exist in ring", key)
+}
+
 // Delete inserts the given key and value into the currently active ring.
-func (elt *Node) Delete(key Key, empty *struct{}) error {
-	fmt.Printf("deleting from %s", elt.Address)
-	// REMEMBER TO FIX THIS; CHECK IF KEY EXISTS AND TELL USER AND ALSO MAKE GET
-	delete(elt.Bucket, key)
-	return nil
-}
-
-func (elt *Node) delete(key Key) error {
-	return call(elt.find(string(key)), "Delete", key, &struct{}{})
-}
-
-// Get retrieves the a value stored at by a given key.
-func (elt *Node) Get(keyvalue *KeyValue, empty *struct{}) error {
-	keyvalue.Value = elt.Bucket[keyvalue.Key]
-	return nil
-}
-
-func (elt *Node) get(keyvalue *KeyValue) error {
-	return call(elt.find(string(keyvalue.Key)), "Get", keyvalue, &struct{}{})
+func (elt *Node) Delete(keyvalue *KeyValue, empty *struct{}) error {
+	if value, ok := elt.Bucket[keyvalue.Key]; ok {
+		delete(elt.Bucket, keyvalue.Key)
+		log.Printf("\t{%s %s} was removed from this node", keyvalue.Key, value)
+		return nil
+	}
+	return fmt.Errorf("\tKey '%s' does not exist in ring", keyvalue.Key)
 }
 
 // // Delete has the peer remove the given key-value from the currently active ring.
@@ -384,14 +386,11 @@ func main() {
 			if active {
 				if len(commands) == 2 {
 					keyvalue := KeyValue{Key(commands[1]), Value("")}
-
-					err := node.get(&keyvalue)
+					err := node.handleData("Get", &keyvalue)
 					if err == nil {
-						if len(keyvalue.Value) > 0 {
-							log.Printf("\tSUCCESS: Retrieved value '%s'", keyvalue.Value)
-						} else {
-							log.Printf("\tFAILED: Could not retrieve a value with key '%s'", commands[1])
-						}
+						log.Printf("\tSUCCESS: Key '%s' retrieved value '%s' from ring", keyvalue.Key, keyvalue.Value)
+					} else {
+						log.Printf("\tFAILED: Key '%s' not found in ring", commands[1])
 					}
 				} else if len(commands) == 1 {
 					log.Printf("\tFAILED: Missing <key> parameter; use 'get <key>' command: ")
@@ -405,13 +404,12 @@ func main() {
 			if active {
 				if len(commands) == 3 {
 					keyvalue := KeyValue{Key(commands[1]), Value(commands[2])}
-
-					err := node.put(&keyvalue)
-					//err := call(node.Address, "Put", &keyvalue, &struct{}{})
+					err := node.handleData("Put", &keyvalue)
 					if err == nil {
-						log.Printf("\tSUCCESS: '%s':'%s' was inserted into node", keyvalue.Key, keyvalue.Value)
+						log.Printf("\tSUCCESS: %s inserted into ring", keyvalue)
+					} else {
+						log.Printf("\tFAILED: %s not added to ring", keyvalue)
 					}
-					//}
 				} else if len(commands) == 2 {
 					log.Printf("\tFAILED: Missing <value> parameter; use 'put <key> <value>' command: ")
 				} else if len(commands) == 1 {
@@ -425,9 +423,12 @@ func main() {
 		case "delete":
 			if active {
 				if len(commands) == 2 {
-					err := node.delete(Key(commands[1]))
+					keyvalue := KeyValue{Key(commands[1]), Value("")}
+					err := node.handleData("Delete", &keyvalue)
 					if err == nil {
-						log.Printf("\tSUCCESS: '%s' value was removed from node", commands[1])
+						log.Printf("\tSUCCESS: Key '%s' removed from ring", commands[1])
+					} else {
+						log.Printf("\tFAILED: Key '%s' not found in ring", commands[1])
 					}
 				} else if len(commands) == 1 {
 					log.Printf("\tFAILED: Missing <key> parameter; use 'delete <key>' command: ")
