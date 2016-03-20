@@ -148,10 +148,19 @@ func (elt *Node) findHash(key *big.Int) string {
 
 // CheckPredecssor checks if predecessor has failed
 func (elt *Node) checkPredecessor() error {
-	client, err := rpc.DialHTTP("tcp", elt.Predecessor)
-	defer client.Close()
-	if err != nil {
-		elt.Predecessor = ""
+				DOES NOT WORK WITH THREE NODES
+	if elt.Predecessor != "" {
+		_, err := rpc.DialHTTP("tcp", elt.Predecessor)
+		//defer client.Close()
+		if err != nil {
+			if elt.Successors[0] == elt.Predecessor {
+				log.Printf("\tSuccessor/Predecessor '%s' has failed", elt.Predecessor)
+				elt.Successors[0] = elt.Address
+			} else {
+				log.Printf("\tPredecessor '%s' has failed", elt.Predecessor)
+			}
+			elt.Predecessor = ""
+		}
 	}
 	return nil
 }
@@ -181,7 +190,6 @@ func (elt *Node) Notify(address string, empty *struct{}) error {
 			hashString(address),
 			hashString(elt.Address),
 			false) {
-		log.Printf("\tSetting predecessor to '%s'", address)
 		elt.Predecessor = address
 	}
 	return nil
@@ -205,6 +213,7 @@ func (elt *Node) stabilize() error {
 
 // GetPredecessor simple returns the predecessor of node
 func (elt *Node) GetPredecessor(empty1 *struct{}, predecessor *string) error {
+
 	*predecessor = elt.Predecessor
 	return nil
 }
@@ -258,26 +267,6 @@ func (elt *Node) Delete(keyvalue *KeyValue, empty *struct{}) error {
 	return fmt.Errorf("\tKey '%s' does not exist in ring", keyvalue.Key)
 }
 
-// // Delete has the peer remove the given key-value from the currently active ring.
-// func (elt *Node) Delete(key Key, empty *struct{}) error {
-// 	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
-// 		delete(elt.Bucket, key)
-// 	} else {
-// 		call(elt.find(string(key)), "Delete", key, &struct{}{})
-// 	}
-// 	return nil
-// }
-
-// Get finds the given key-value in the currently active ring.
-// func (elt *Node) Get(key Key, value *Value) error {
-// 	if between(hashString(elt.Address), hashString(string(key)), hashString(elt.Successors[0]), true) {
-// 		*value = elt.Bucket[key]
-// 	} else {
-// 		call(elt.find(string(key)), "Get", key, value)
-// 	}
-// 	return nil
-// }
-
 // Ping is used to ping between server and node
 func (elt *Node) Ping(address string, pong *bool) error {
 	if address == "SUCCESS" {
@@ -326,17 +315,26 @@ func main() {
 		// Fingers:     [161]string,
 		Next: 0,
 	}
-
 	go func() {
 		for {
 			if active {
+				node.checkPredecessor()
 				node.stabilize()
-				//node.checkPredecessor()
 				//node.fixFingers()
 			}
 			time.Sleep(time.Second)
 		}
 	}()
+	// go func() {
+	// 	for {
+	// 		if active {
+	// 			node.checkPredecessor()
+	// 			//node.stabilize()
+	// 			//node.fixFingers()
+	// 		}
+	// 		time.Sleep(time.Second)
+	// 	}
+	// }()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Default port is ':3410'\nEnter command:")
