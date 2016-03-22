@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,7 @@ type Node struct {
 	Predecessor string
 	Successors  [3]string
 	Bucket      map[Key]Value
-	Fingers     [161]string
+	Fingers     []string
 	Next        int
 	mutex       sync.Mutex
 }
@@ -109,12 +110,11 @@ func getLocalAddress() string {
 
 func call(address string, method string, request interface{}, reply interface{}) error {
 	client, err := rpc.DialHTTP("tcp", address)
-	defer client.Close()
 	if err != nil {
-		client.Close()
-		log.Printf("\tError connecting to server at %s: %v", address, err)
-		return nil
+		//log.Printf("\tCommand(%s) Error connecting to server at %s: %v", method, address, err)
+		return fmt.Errorf("\tCommand(%s) Error connecting to server at %s: %v", method, address, err)
 	}
+	defer client.Close()
 	return client.Call("Node."+method, request, reply)
 }
 
@@ -123,8 +123,13 @@ func (elt *Node) find(key string) string {
 	count := 32
 	for !keyfound.Found {
 		if count > 0 {
-			call(keyfound.Address, "FindSuccessor", hashString(key), &keyfound)
-			count--
+			//log.Printf("find is calling FindSuccessor")
+			err := call(keyfound.Address, "FindSuccessor", hashString(key), &keyfound)
+			if err == nil {
+				count--
+			} else {
+				count = 0
+			}
 		} else {
 			return ""
 		}
@@ -137,8 +142,13 @@ func (elt *Node) findHash(key *big.Int) string {
 	count := 32
 	for !keyfound.Found {
 		if count > 0 {
-			call(keyfound.Address, "FindSuccessor", key, &keyfound)
-			count--
+			//log.Printf("findHash is calling FindSuccessor")
+			err := call(keyfound.Address, "FindSuccessor", key, &keyfound)
+			if err == nil {
+				count--
+			} else {
+				count = 0
+			}
 		} else {
 			return ""
 		}
@@ -148,18 +158,14 @@ func (elt *Node) findHash(key *big.Int) string {
 
 // CheckPredecssor checks if predecessor has failed
 func (elt *Node) checkPredecessor() error {
-				DOES NOT WORK WITH THREE NODES
 	if elt.Predecessor != "" {
-		_, err := rpc.DialHTTP("tcp", elt.Predecessor)
-		//defer client.Close()
+		client, err := rpc.DialHTTP("tcp", elt.Predecessor)
 		if err != nil {
-			if elt.Successors[0] == elt.Predecessor {
-				log.Printf("\tSuccessor/Predecessor '%s' has failed", elt.Predecessor)
-				elt.Successors[0] = elt.Address
-			} else {
-				log.Printf("\tPredecessor '%s' has failed", elt.Predecessor)
-			}
+			log.Printf("\tPredecessor '%s' has failed", elt.Predecessor)
 			elt.Predecessor = ""
+			//elt.Successors[0] = elt.Address
+		} else {
+			client.Close()
 		}
 	}
 	return nil
@@ -167,9 +173,41 @@ func (elt *Node) checkPredecessor() error {
 
 // FixFingers refreshes finger table enteries
 func (elt *Node) fixFingers() error {
-	elt.Next = (elt.Next + 1) % len(elt.Fingers)
-	elt.Fingers[elt.Next] = elt.findHash(elt.jump(elt.Next))
-	return nil
+	elt.Next++
+	if elt.Next > len(elt.Fingers)-1 {
+		elt.Next = 0
+	}
+	//log.Printf("fixFingers is calling findHash")
+	addrs := elt.findHash(elt.jump(elt.Next))
+
+	if elt.Fingers[elt.Next] != addrs && addrs != "" {
+		log.Printf("\tWriting FingerTable entry '%d' as '%s'\n", elt.Next, addrs)
+		elt.Fingers[elt.Next] = addrs
+	}
+	for {
+		elt.Next++
+		if elt.Next > len(elt.Fingers)-1 {
+			elt.Next = 0
+			return nil
+		}
+
+		if between(hashString(elt.Address), elt.jump(elt.Next), hashString(addrs), false) && addrs != "" {
+			elt.Fingers[elt.Next] = addrs
+		} else {
+			elt.Next--
+			return nil
+		}
+	}
+}
+
+// ClosestPrecedingNode finds closest preceding node
+func (elt *Node) closestPrecedingNode(id *big.Int) string {
+	for i := len(elt.Fingers) - 1; i > 0; i-- {
+		if between(hashString(elt.Address), hashString(elt.Fingers[i]), id, false) {
+			return elt.Fingers[i]
+		}
+	}
+	return elt.Successors[0]
 }
 
 // FindSuccessor asks Node elt to find the successor of address
@@ -177,9 +215,9 @@ func (elt *Node) FindSuccessor(hash *big.Int, keyfound *KeyFound) error {
 	if between(hashString(elt.Address), hash, hashString(elt.Successors[0]), true) {
 		keyfound.Address = elt.Successors[0]
 		keyfound.Found = true
-	} else {
-		keyfound.Address = elt.Successors[0]
+		return nil
 	}
+	keyfound.Address = elt.closestPrecedingNode(hash)
 	return nil
 }
 
@@ -197,30 +235,57 @@ func (elt *Node) Notify(address string, empty *struct{}) error {
 
 // Stabilize is called every second
 func (elt *Node) stabilize() error {
+	var successors []string
+	err := call(elt.Successors[0], "GetSuccessorList", &struct{}{}, &successors)
+	if err == nil {
+		elt.Successors[1] = successors[0]
+		elt.Successors[2] = successors[1]
+	} else {
+		log.Printf("\tPrimary successor '%s' failed", elt.Successors[0])
+		if elt.Successors[0] == "" {
+			log.Printf("\tSetting primary successor to address of this node '%s'", elt.Address)
+			elt.Successors[0] = elt.Address
+		} else {
+			log.Printf("\tSetting secondary successor '%s' as primary ", elt.Successors[1])
+			elt.Successors[0] = elt.Successors[1]
+			elt.Successors[1] = elt.Successors[2]
+			elt.Successors[2] = ""
+		}
+	}
+
 	x := ""
 	call(elt.Successors[0], "GetPredecessor", &struct{}{}, &x)
+
 	if between(hashString(elt.Address),
 		hashString(x),
 		hashString(elt.Successors[0]),
 		false) && x != "" {
-		log.Printf("\tSetting successor to '%s'", x)
+		log.Printf("\tSetting primary successor to '%s'", x)
 		elt.Successors[0] = x
 	}
-	call(elt.Successors[0], "Notify", elt.Address, &struct{}{})
-	//call(elt.Address, "CheckPredecssor", &struct{}{}, &struct{}{})
+
+	err = call(elt.Successors[0], "Notify", elt.Address, &struct{}{})
+	if err != nil {
+	}
 	return nil
 }
 
 // GetPredecessor simple returns the predecessor of node
 func (elt *Node) GetPredecessor(empty1 *struct{}, predecessor *string) error {
-
 	*predecessor = elt.Predecessor
+	return nil
+}
+
+// GetSuccessorList simple returns the predecessor of node
+func (elt *Node) GetSuccessorList(empty1 *struct{}, successors *[]string) error {
+	*successors = elt.Successors[:]
 	return nil
 }
 
 // Join an existing ring
 func (elt *Node) Join(address string, successor *string) error {
 	*successor = elt.find(address)
+	call(*successor, "GetAll", address, &struct{}{})
 	return nil
 }
 
@@ -228,13 +293,42 @@ func (elt *Node) Join(address string, successor *string) error {
 func (elt *Node) Dump(empty1 *struct{}, info *Node) error {
 	info.Address = elt.Address
 	info.Predecessor = elt.Predecessor
-	info.Successors[0] = elt.Successors[0]
+	info.Successors = elt.Successors
 	info.Bucket = elt.Bucket
+	var old string
+	for i := 0; i < len(elt.Fingers); i++ {
+		if old != elt.Fingers[i] {
+			info.Fingers = append(info.Fingers, strconv.Itoa(i)+":\t", elt.Fingers[i], "\n\t\t\t")
+			old = elt.Fingers[i]
+		}
+	}
+	return nil
+}
+
+// PutAll inserts the given key and value into the currently active ring.
+func (elt *Node) PutAll(bucket map[Key]Value, empty *struct{}) error {
+	for key, value := range bucket {
+		elt.Bucket[key] = value
+	}
+	return nil
+}
+
+// GetAll inserts the given key and value into the currently active ring.
+func (elt *Node) GetAll(address string, empty *struct{}) error {
+	tempBucket := make(map[Key]Value)
+	for key, value := range elt.Bucket {
+		if between(hashString(elt.Predecessor), hashString(string(key)), hashString(address), false) {
+			tempBucket[key] = value
+			delete(elt.Bucket, key)
+		}
+	}
+	call(address, "PutAll", tempBucket, &struct{}{})
 	return nil
 }
 
 func (elt *Node) handleData(command string, keyvalue *KeyValue) error {
 	if command == "Get" {
+		// log.Printf("handling get data")
 		return call(elt.find(string(keyvalue.Key)), command, keyvalue.Key, &keyvalue.Value)
 	}
 	return call(elt.find(string(keyvalue.Key)), command, keyvalue, &struct{}{})
@@ -249,6 +343,7 @@ func (elt *Node) Put(keyvalue *KeyValue, empty *struct{}) error {
 
 // Get retrieves the a value stored in the ring by a given key.
 func (elt *Node) Get(key Key, value *Value) error {
+	// log.Printf("getting data from %s", elt.Address)
 	if val, ok := elt.Bucket[key]; ok {
 		*value = val
 		log.Printf("\t{%s %s} value was retrieved from this node", key, val)
@@ -312,29 +407,19 @@ func main() {
 		Predecessor: "",
 		Successors:  [3]string{getLocalAddress() + port},
 		Bucket:      make(map[Key]Value),
-		// Fingers:     [161]string,
-		Next: 0,
+		Fingers:     make([]string, 161),
+		Next:        0,
 	}
 	go func() {
 		for {
 			if active {
 				node.checkPredecessor()
 				node.stabilize()
-				//node.fixFingers()
+				node.fixFingers()
 			}
 			time.Sleep(time.Second)
 		}
 	}()
-	// go func() {
-	// 	for {
-	// 		if active {
-	// 			node.checkPredecessor()
-	// 			//node.stabilize()
-	// 			//node.fixFingers()
-	// 		}
-	// 		time.Sleep(time.Second)
-	// 	}
-	// }()
 
 	scanner := bufio.NewScanner(os.Stdin)
 	fmt.Println("Default port is ':3410'\nEnter command:")
@@ -344,6 +429,8 @@ func main() {
 		case "help":
 			printHelp()
 		case "quit", "clear", "exit":
+			log.Printf("\tPutting all data in successor '%s'", node.Successors[0])
+			call(node.Successors[0], "PutAll", node.Bucket, &struct{}{})
 			log.Printf("\tShutting down\n\n")
 			os.Exit(0)
 		case "port":
@@ -388,7 +475,7 @@ func main() {
 					if err == nil {
 						log.Printf("\tSUCCESS: Key '%s' retrieved value '%s' from ring", keyvalue.Key, keyvalue.Value)
 					} else {
-						log.Printf("\tFAILED: Key '%s' not found in ring", commands[1])
+						log.Printf("\tFAILED: Key '%s' not found in ring. ERROR: %s", commands[1], err)
 					}
 				} else if len(commands) == 1 {
 					log.Printf("\tFAILED: Missing <key> parameter; use 'get <key>' command: ")
@@ -442,8 +529,8 @@ func main() {
 					var values Node
 					err := call(node.Address, "Dump", &struct{}{}, &values)
 					if err == nil {
-						log.Printf("\n\tAddress:\t%s\n\tPredecessor:\t%s\n\tSuccessors:\t%v\n\tBucket:\t\t%v",
-							values.Address, values.Predecessor, values.Successors, values.Bucket)
+						log.Printf("\n\tAddress:\t%s\n\tPredecessor:\t%s\n\tSuccessors:\t%v\n\tBucket:\t\t%v\n\tFingers:\t%v",
+							values.Address, values.Predecessor, values.Successors, values.Bucket, values.Fingers)
 					}
 				} else {
 					log.Printf("\tFAILED: Too many parameters given; use 'dump' command")
