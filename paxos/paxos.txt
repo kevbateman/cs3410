@@ -1,0 +1,238 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"log"
+	"net/rpc"
+	"os"
+	"strings"
+	"sync"
+)
+
+type Command struct {
+	Address string // The Proposer
+	Sequence Sequence
+	Command string
+	Tag int64			// To uniquely identify a command
+	Key string
+}
+
+type Prepare struct {
+//Prepare(slot, seq) -> (okay, promised, command)
+	Slot Slot
+	Seq Sequence
+}
+
+type Accepted struct {
+//Accepted(slot, seq, command) -> (okay, promised)
+	Slot Slot
+	Seq Sequence
+	Command Command
+}
+
+type Propose struct {
+	Command Command
+}
+
+type Accept struct {
+	Slot Slot
+	N Sequence
+	V Command
+}
+
+type Decide struct {
+	Slot Slot
+	Value Command
+}
+
+type Request struct {
+	Prepare Prepare
+	Accepted Accepted
+	Propose Propose
+	Accept Accept
+	Decide Decide
+	Message string
+	Address string
+}
+
+type Response struct {
+	Command Command
+	Message string
+	Okay bool
+	Promised Sequence
+}
+
+// incremented within a slot
+type Sequence struct {
+	N int
+	Address string
+}
+
+func (seq Sequence) String() string {
+	return fmt.Sprintf("Sequence{N: %d, Address: %s}", seq.N, seq.Address)
+}
+
+func (this Sequence) Cmp(that Sequence) int {
+	if this.N == that.N {
+		if this.Address > that.Address {
+			return 1
+		}
+		if this.Address < that.Address {
+			return -1
+		}
+		return 0
+	}
+	if this.N < that.N {
+		return -1
+	}
+	if this.N > that.N {
+		return 1
+	}
+	return 0
+}
+
+// Prepare ...
+func (r *Replica) Prepare(proposal PrepareProposal, response *PrepareResponse) error {
+	currentSlot := r.Slot[proposal.Slot.PromiseNumber.Number]
+	currentSequence = currentSlot.SequenceNumber
+	if//successfully promised for value
+		response.Okay = true
+		response.Promised = proposal.Sequence
+		response.Command = proposal.Slot.Command
+	}
+	else {
+		response.Promised = r.
+	}
+	return nil
+}
+
+// Accept ...
+func (r *Replica) Accept(accepted Slot, response *ReplicaResponse, command string) error {
+
+	return nil
+}
+
+func call(address string, method string, request interface{}, reply interface{}) error {
+	client, err := rpc.DialHTTP("tcp", address)
+	if err != nil {
+		//log.Printf("\tCommand(%s) Error connecting to server at %s: %v", method, address, err)
+		return fmt.Errorf("\tCommand(%s) Error connecting to server at %s: %v", method, address, err)
+	}
+	defer client.Close()
+	return client.Call("Replica."+method, request, reply)
+}
+func printHelp() {
+	fmt.Println("\thelp:\n\t\tDisplays a list of recognized commands")
+	fmt.Println("\tquit:\n\t\tEnds the program")
+	fmt.Println("\tport <n>:\n\t\tSet listening port to <n>. Default is ':3410'")
+	fmt.Println("\tcreate:\n\t\tCreate a new ring on the current port")
+	fmt.Println("\tget <key>:\n\t\tGet the value from the current node corresponding to the given <key>")
+	fmt.Println("\tput <key> <value>:\n\t\tGet the value from the current node corresponding to the given key")
+}
+
+//
+// MAIN FUNCTION STARTS HERE
+//
+func main() {
+	fmt.Println()
+	if len(os.Args) != 1 {
+		log.Fatalf("\t'paxos' takes no arguemnts")
+	}
+
+	var replica = &Replica{
+		Address:   "",
+		Cell:      make([]string, 0),
+		Slot:      make([]Slot, 100),
+		Data:      make(map[string]string),
+		Listeners: make(map[string]chan string),
+	}
+	//port := ":3410"
+	active := false
+
+	scanner := bufio.NewScanner(os.Stdin)
+	fmt.Println("Default port is ':3410'\nEnter command:")
+	for scanner.Scan() {
+		commands := strings.Split(scanner.Text(), " ")
+		switch commands[0] {
+		case "help":
+			printHelp()
+		case "quit", "clear", "exit":
+			log.Printf("\tShutting down\n\n")
+			os.Exit(0)
+		case "get":
+			if active {
+				if len(commands) == 2 {
+					keyvalue := keyvalue{commands[1], ""}
+					err := call(replica.Address, "Get", keyvalue.key, &keyvalue.value)
+					if err == nil {
+						log.Printf("\tSUCCESS: Key '%s' retrieved value '%s' from ring", keyvalue.key, keyvalue.value)
+					} else {
+						log.Printf("\tFAILED: Key '%s' not found in ring. ERROR: %s", commands[1], err)
+					}
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <key> parameter; use 'get <key>' command: ")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'get <key>' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active in order to 'get <key>' values")
+			}
+		case "put":
+			if active {
+				if len(commands) == 3 {
+					keyvalue := keyvalue{commands[1], ""}
+					err := call(replica.Address, "Put", keyvalue.key, &keyvalue.value)
+					if err == nil {
+						log.Printf("\tSUCCESS: %s inserted into ring", keyvalue)
+					} else {
+						log.Printf("\tFAILED: %s not added to ring", keyvalue)
+					}
+				} else if len(commands) == 2 {
+					log.Printf("\tFAILED: Missing <value> parameter; use 'put <key> <value>' command: ")
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <key> and <value> parameters; use 'put <key> <value>' command")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'put <key> <value>' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active in order to 'put <key> <value>' pairs")
+			}
+		case "delete":
+			if active {
+				if len(commands) == 2 {
+					keyvalue := keyvalue{commands[1], ""}
+					err := call(replica.Address, "Delete", keyvalue.key, &keyvalue.value)
+					if err == nil {
+						log.Printf("\tSUCCESS: Key '%s' removed from ring", commands[1])
+					} else {
+						log.Printf("\tFAILED: Key '%s' not found in ring", commands[1])
+					}
+				} else if len(commands) == 1 {
+					log.Printf("\tFAILED: Missing <key> parameter; use 'delete <key>' command: ")
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'delete <key>' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active to 'delete <key>' values")
+			}
+		case "dump":
+			if active {
+				if len(commands) == 1 {
+					var values Replica
+					keyvalue := keyvalue{commands[1], ""}
+					err := call(replica.Address, "Dump", keyvalue.key, &keyvalue.value)
+					if err == nil {
+						log.Printf("\n\t%v", values)
+					}
+				} else {
+					log.Printf("\tFAILED: Too many parameters given; use 'dump' command")
+				}
+			} else {
+				log.Printf("\tFAILED: Node must be active to 'dump' values")
+			}
+		default:
+			log.Printf("\tUnrecognized Command '%s'", scanner.Text())
+		}
+	}
+}
