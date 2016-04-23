@@ -391,9 +391,9 @@ rounds:
 		response := make(chan Response, len(elt.Cell))
 		for _, v := range elt.Cell {
 			go func(v string, slot Slot, sequence Sequence, response chan Response) {
-				req := Request{Address: elt.Address, Prepare: Prepare{Slot: slot, Seq: sequence}}
+				requ:= Request{Address: elt.Address, Prepare: Prepare{Slot: slot, Seq: sequence}}
 				var resp Response
-				err := call(v, "Prepare", req, &resp)
+				err := call(v, "Prepare", requ, &resp)
 				if err != nil {
 					log.Fatal("ERROR PREPARE")
 					return
